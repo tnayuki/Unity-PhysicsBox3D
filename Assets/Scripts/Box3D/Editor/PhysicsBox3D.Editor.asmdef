@@ -1,0 +1,18 @@
+{
+    "name": "PhysicsBox3D.Editor",
+    "rootNamespace": "PhysicsBox3D.EditorTools",
+    "references": [
+        "PhysicsBox3D"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

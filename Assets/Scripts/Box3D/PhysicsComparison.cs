@@ -5,9 +5,17 @@ using Debug = UnityEngine.Debug;
 namespace PhysicsBox3D
 {
     /// <summary>
-    /// Side-by-side comparison of Unity's built-in physics (PhysX) and the Box3D binding.
-    /// Both engines are driven manually every FixedUpdate under Physics.simulationMode = Script,
-    /// and each step is timed with the same Stopwatch so the numbers are comparable.
+    /// Comparison of Unity's built-in physics (PhysX) and the Box3D binding.
+    /// Both engines are driven manually under Physics.simulationMode = Script and
+    /// timed with the same Stopwatch, but they run in separate solo windows:
+    /// stepping both in the same FixedUpdate inflates the numbers through mutual
+    /// cache/thermal interference (measured +10-17% on PhysX at 4096 bodies, and
+    /// the effect persists with zero Box3D threads, so it is not oversubscription).
+    /// Each body count runs four windows in A-B-B-A order (PhysX, Box3D, Box3D,
+    /// PhysX) and reports each engine's two-window average: repeated solo windows
+    /// measure ~6-8% slower the later they run (warm-up/GC drift), so giving each
+    /// engine one early and one late window cancels that bias instead of always
+    /// handing it to whoever goes second.
     ///
     /// Left pile  = PhysX  (Rigidbody + BoxCollider, stepped via Physics.Simulate)
     /// Right pile = Box3D  (native bodies, stepped via Box3DWorld.StepAndSync)
@@ -62,6 +70,18 @@ namespace PhysicsBox3D
         private double _box3dSum;
         private string _report = "";
 
+        // Solo-window schedule per body count: A-B-B-A (false = PhysX window).
+        private static readonly bool[] WindowOrder = { false, true, true, false };
+        private bool _measuringBox3d;
+        private int _windowIndex;
+        private double _physxTotal, _box3dTotal; // sums of finished window averages
+        private int _physxWindows, _box3dWindows;
+
+        private int WindowCount => physxEnabled && box3dEnabled ? WindowOrder.Length : 1;
+
+        private bool WindowIsBox3D(int index) =>
+            physxEnabled && box3dEnabled ? WindowOrder[index] : box3dEnabled;
+
         // Auto-sequence state.
         private int _seqIndex;
         private bool _autoRun = true;
@@ -75,6 +95,7 @@ namespace PhysicsBox3D
             Physics.simulationMode = SimulationMode.Script;
             if (autoSequence != null && autoSequence.Length > 0)
                 countPerEngine = autoSequence[0];
+            _measuringBox3d = WindowIsBox3D(0);
             _world = new Box3DWorld(new Vector3(0f, -9.81f, 0f), Mathf.NextPowerOfTwo(countPerEngine) + 8);
             BuildScene();
         }
@@ -129,10 +150,14 @@ namespace PhysicsBox3D
             Spawn();
         }
 
-        /// <summary>Respawn both piles with a new body count (used by editor tooling).</summary>
+        /// <summary>Restart measurement at a new body count (used by editor tooling).</summary>
         public void Respawn(int count)
         {
             countPerEngine = Mathf.Clamp(count, 8, 8192);
+            _windowIndex = 0;
+            _physxTotal = _box3dTotal = 0;
+            _physxWindows = _box3dWindows = 0;
+            _measuringBox3d = WindowIsBox3D(0);
             Spawn();
         }
 
@@ -162,7 +187,7 @@ namespace PhysicsBox3D
             {
                 Vector3 offset = GridOffset(i);
 
-                if (physxEnabled)
+                if (physxEnabled && !_measuringBox3d)
                 {
                     // PhysX cube: standard Rigidbody + BoxCollider.
                     var px = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -181,7 +206,7 @@ namespace PhysicsBox3D
                     if (disableSleeping) rb.sleepThreshold = 0f;
                 }
 
-                if (box3dEnabled)
+                if (box3dEnabled && _measuringBox3d)
                 {
                     // Box3D cube: rendered GameObject with NO PhysX collider; native body drives it.
                     var b3 = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -215,10 +240,11 @@ namespace PhysicsBox3D
         private void FixedUpdate()
         {
             float dt = Time.fixedDeltaTime;
+            bool box3dPhase = _measuringBox3d;
 
-            // Time PhysX.
+            // Only the engine that owns the current solo window is stepped.
             double physxRaw = 0;
-            if (physxEnabled)
+            if (physxEnabled && !box3dPhase)
             {
                 _sw.Restart();
                 Physics.Simulate(dt);
@@ -227,9 +253,9 @@ namespace PhysicsBox3D
                 _physxMs = Smooth(_physxMs, physxRaw);
             }
 
-            // Time Box3D (step + batched parallel transform write-back).
+            // Box3D window: step + batched parallel transform write-back.
             double box3dRaw = 0;
-            if (box3dEnabled)
+            if (box3dEnabled && box3dPhase)
             {
                 _sw.Restart();
                 _world.StepAndSync(dt, subSteps);
@@ -244,14 +270,27 @@ namespace PhysicsBox3D
                 _box3dSum += box3dRaw;
                 if (--_samplesLeft == 0)
                 {
-                    double pxAvg = _physxSum / SampleSteps;
-                    double b3Avg = _box3dSum / SampleSteps;
+                    double avg = (box3dPhase ? _box3dSum : _physxSum) / SampleSteps;
+                    if (box3dPhase) { _box3dTotal += avg; _box3dWindows++; }
+                    else { _physxTotal += avg; _physxWindows++; }
+
+                    _windowIndex++;
+                    if (_windowIndex < WindowCount)
+                    {
+                        // Next solo window of the A-B-B-A schedule at the same body count.
+                        _measuringBox3d = WindowIsBox3D(_windowIndex);
+                        Spawn();
+                        return;
+                    }
+
+                    double pxAvg = _physxWindows > 0 ? _physxTotal / _physxWindows : 0;
+                    double b3Avg = _box3dWindows > 0 ? _box3dTotal / _box3dWindows : 0;
                     var parts = new System.Collections.Generic.List<string>();
                     if (physxEnabled) parts.Add($"PhysX {pxAvg:0.000} ms");
                     if (box3dEnabled) parts.Add($"Box3D {b3Avg:0.000} ms");
                     if (physxEnabled && box3dEnabled) parts.Add($"{pxAvg / b3Avg:0.00}x");
                     _report = $"{countPerEngine} bodies:  " + string.Join("  |  ", parts);
-                    Debug.Log($"[Bench] avg over {SampleSteps} steps @ {_report}");
+                    Debug.Log($"[Bench] avg of {WindowCount} x {SampleSteps}-step solo windows @ {_report}");
                     _results.Add(_report);
                     if (_autoRun) _pauseUntil = Time.time + pauseBetween;
                 }
@@ -313,18 +352,26 @@ namespace PhysicsBox3D
             GUILayout.Label($"Bodies per engine: <b>{countPerEngine}</b>   FPS: <b>{_fps:0}</b>" +
                             (disableSleeping ? "   (no sleep)" : ""), style);
             GUILayout.Space(6);
-            GUILayout.Label(physxEnabled
-                ? $"<color=#5B9BFF>PhysX  step:</color> <b>{_physxMs:0.000} ms</b>"
-                : "<color=#5B9BFF>PhysX:</color> disabled", style);
-            GUILayout.Label(box3dEnabled
-                ? $"<color=#FF9B4B>Box3D  step+sync:</color> <b>{_box3dMs:0.000} ms</b>  " +
-                  $"(moved {_world.LastMovedCount})"
-                : "<color=#FF9B4B>Box3D:</color> disabled", style);
+            GUILayout.Label(!physxEnabled
+                ? "<color=#5B9BFF>PhysX:</color> disabled"
+                : !_measuringBox3d
+                    ? $"<color=#5B9BFF>PhysX  step:</color> <b>{_physxMs:0.000} ms</b>"
+                    : $"<color=#5B9BFF>PhysX  step:</color> " +
+                      (_physxWindows > 0 ? $"{_physxTotal / _physxWindows:0.000} ms (solo avg)" : "waiting"), style);
+            GUILayout.Label(!box3dEnabled
+                ? "<color=#FF9B4B>Box3D:</color> disabled"
+                : _measuringBox3d
+                    ? $"<color=#FF9B4B>Box3D  step+sync:</color> <b>{_box3dMs:0.000} ms</b>  " +
+                      $"(moved {_world.LastMovedCount})"
+                    : $"<color=#FF9B4B>Box3D  step+sync:</color> " +
+                      (_box3dWindows > 0 ? $"{_box3dTotal / _box3dWindows:0.000} ms (solo avg)" : "waiting"), style);
             GUILayout.Space(6);
             if (_samplesLeft > 0)
             {
                 string stage = _autoRun ? $"auto {_seqIndex + 1}/{autoSequence.Length}" : "manual";
-                GUILayout.Label($"benchmarking ({stage})… {SampleSteps - _samplesLeft}/{SampleSteps}", style);
+                string engine = _measuringBox3d ? "Box3D" : "PhysX";
+                GUILayout.Label($"benchmarking {engine} ({stage}, window {_windowIndex + 1}/{WindowCount})… " +
+                                $"{SampleSteps - _samplesLeft}/{SampleSteps}", style);
             }
             else if (_autoRun)
             {

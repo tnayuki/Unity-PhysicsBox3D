@@ -15,12 +15,18 @@ typedef struct b3uPose
 	float qx, qy, qz, qw;
 } b3uPose;
 
-BOX3D_EXPORT uint32_t b3u_CreateWorld( float gx, float gy, float gz, uint32_t workerCount )
+// External-scheduler world: Box3D creates NO threads and drives its parallel tasks
+// through the supplied enqueue/finish callbacks (Unity's C# Job System on the managed
+// side). Total thread count stays at Unity's existing worker pool (~core count).
+BOX3D_EXPORT uint32_t b3u_CreateWorldExternal( float gx, float gy, float gz, uint32_t workerCount,
+											   void* enqueueTask, void* finishTask, void* userContext )
 {
 	b3WorldDef def = b3DefaultWorldDef();
 	def.gravity = ( b3Vec3 ){ gx, gy, gz };
-	// >1 enables multithreading via Box3D's internal scheduler (no user task system needed).
 	def.workerCount = workerCount;
+	def.enqueueTask = (b3EnqueueTaskCallback*)enqueueTask;
+	def.finishTask = (b3FinishTaskCallback*)finishTask;
+	def.userTaskContext = userContext;
 	return b3StoreWorldId( b3CreateWorld( &def ) );
 }
 

@@ -39,7 +39,12 @@ namespace PhysicsBox3D
         {
             if (workerCount <= 0) workerCount = AutoWorkerCount;
             _capacity = capacity;
-            _worldId = Box3DNative.b3u_CreateWorld(gravity.x, gravity.y, gravity.z, (uint)workerCount);
+            // Box3D drives its parallel tasks through Unity's Job System (external scheduler
+            // via Box3DJobBridge), so it spawns no threads of its own — total thread count
+            // stays at Unity's existing worker pool (~core count).
+            Box3DJobBridge.CaptureMainThread();
+            _worldId = Box3DNative.b3u_CreateWorldExternal(gravity.x, gravity.y, gravity.z,
+                (uint)workerCount, Box3DJobBridge.EnqueuePtr, Box3DJobBridge.FinishPtr, IntPtr.Zero);
             _poses = new NativeArray<Box3DNative.Pose>(capacity, Allocator.Persistent,
                 NativeArrayOptions.ClearMemory);
             _transforms = new TransformAccessArray(capacity);

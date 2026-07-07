@@ -31,9 +31,14 @@ namespace PhysicsBox3D
             public float qx, qy, qz, qw;
         }
 
-        /// <summary>workerCount &gt; 1 enables Box3D's internal multithreaded scheduler.</summary>
+        /// <summary>
+        /// External-scheduler world: Box3D spawns no threads and routes its parallel
+        /// tasks through the enqueue/finish callbacks (Unity's Job System via Box3DJobBridge).
+        /// workerCount controls how wide Box3D fans its solver tasks out.
+        /// </summary>
         [DllImport(Lib)]
-        public static extern uint b3u_CreateWorld(float gx, float gy, float gz, uint workerCount);
+        public static extern uint b3u_CreateWorldExternal(float gx, float gy, float gz, uint workerCount,
+            IntPtr enqueueTask, IntPtr finishTask, IntPtr userContext);
 
         [DllImport(Lib)]
         public static extern void b3u_DestroyWorld(uint world);

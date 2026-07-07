@@ -18,7 +18,7 @@ Measured on an Apple Silicon Mac (4P+6E cores), falling-tower scenario, 500-step
 - **Sleep enabled:** Box3D is 1.7–2.4x faster. Most of the gap comes from convergence quality — Box3D (TGS soft) puts a settled pile to sleep within seconds, while PhysX (PGS) keeps ~98% of bodies awake from contact jitter.
 - **Sleep disabled:** Box3D ahead across the board (1.1–1.4x).
 
-Box3D's multithreading matters: single-threaded it loses at 4096 bodies (14.3 ms vs 6.6 ms). This binding enables Box3D's built-in scheduler (`workerCount > 1`, no task system required) with an adaptive worker count of `clamp(bodies / 128, 1, cores)`.
+Box3D's multithreading matters: single-threaded it loses at 4096 bodies (14.3 ms vs 6.6 ms). This binding plugs Box3D's task callbacks into Unity's C# Job System (`Box3DJobBridge`), so the solver runs wide on Unity's existing job workers and Box3D spawns no threads of its own — total thread count stays at the worker pool (~core count), and physics tasks show up in the profiler alongside every other job. The solve fans out with an adaptive worker count of `clamp(bodies / 128, 1, cores)`; correctness never depends on the pool, since the step thread runs worker 0 inline and can complete the whole step alone even if Unity's workers are busy.
 
 Burst-compiling the write-back job is worth 17–29% of the whole step+sync (same-session A/B, sleep enabled: 4096 bodies 2.73 ms → 1.93 ms). The per-body skip check reads each Transform's position and rotation, and that math is what Burst vectorizes away.
 

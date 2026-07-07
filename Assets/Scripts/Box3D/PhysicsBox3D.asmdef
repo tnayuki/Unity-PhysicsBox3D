@@ -2,6 +2,7 @@
     "name": "PhysicsBox3D",
     "rootNamespace": "PhysicsBox3D",
     "references": [
+        "Unity.Burst",
         "Unity.InputSystem"
     ],
     "includePlatforms": [],

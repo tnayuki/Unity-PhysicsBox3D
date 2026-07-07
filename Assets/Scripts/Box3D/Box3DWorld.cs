@@ -1,4 +1,5 @@
 using System;
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
@@ -112,6 +113,9 @@ namespace PhysicsBox3D
                 radius, 1f, friction, restitution, -1);
         }
 
+        // CompileSynchronously: the job must be Burst-compiled from its very first run,
+        // or the benchmark's first sample window would silently measure the Mono version.
+        [BurstCompile(CompileSynchronously = true)]
         private struct WritePosesJob : IJobParallelForTransform
         {
             [ReadOnly] public NativeArray<Box3DNative.Pose> Poses;

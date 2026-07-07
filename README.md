@@ -2,16 +2,25 @@
 
 A Unity binding for [Box3D](https://github.com/erincatto/box3d) — Erin Catto's new open-source 3D physics engine — benchmarked side by side against Unity's built-in PhysX.
 
-The sync layer follows the batched transform write-back design of Unity's official Physics Core 2D (the Box2D v3 binding): moved bodies are fetched from native code in a single call into a contiguous buffer, then written back to Transforms in parallel with `IJobParallelForTransform`. No per-body P/Invoke.
+The sync layer follows the batched transform write-back design of Unity's official Physics Core 2D (the Box2D v3 binding): moved bodies are fetched from native code in a single call into a contiguous buffer, then written back to Transforms in parallel with a Burst-compiled `IJobParallelForTransform`. No per-body P/Invoke.
 
 ## Results
 
-Measured on an Apple Silicon Mac (4P+6E cores), falling-tower scenario, 500-step average right after spawn, matched materials and depenetration speed on both sides:
+Measured on an Apple Silicon Mac (4P+6E cores), falling-tower scenario, 500-step average right after spawn, matched materials and depenetration speed on both sides (per-step ms, PhysX / Box3D step+sync):
 
-- **Sleep enabled (game-like, includes settling):** Box3D is 1.6–1.9x faster than PhysX (4096 bodies: 2.12 ms vs 3.92 ms). Most of the gap comes from convergence quality — Box3D (TGS soft) puts a settled pile to sleep within seconds, while PhysX (PGS) keeps ~98% of bodies awake from contact jitter.
-- **Sleep disabled (pure full-load solver):** near parity — 1.07–1.08x at 1024–4096 bodies, PhysX ahead at 512.
+| bodies | sleep enabled (game-like) | sleep disabled (full-load solver) |
+|-------:|--------------------------:|----------------------------------:|
+|    512 | 0.500 / **0.294** (1.70x) |  0.859 / **0.778** (1.10x) |
+|   1024 | 0.973 / **0.577** (1.69x) |  1.314 / **1.021** (1.29x) |
+|   2048 | 1.945 / **0.930** (2.09x) |  2.598 / **2.012** (1.29x) |
+|   4096 | 4.658 / **1.930** (2.41x) |  6.016 / **4.229** (1.42x) |
+
+- **Sleep enabled:** Box3D is 1.7–2.4x faster. Most of the gap comes from convergence quality — Box3D (TGS soft) puts a settled pile to sleep within seconds, while PhysX (PGS) keeps ~98% of bodies awake from contact jitter.
+- **Sleep disabled:** Box3D ahead across the board (1.1–1.4x).
 
 Box3D's multithreading matters: single-threaded it loses at 4096 bodies (14.3 ms vs 6.6 ms). This binding enables Box3D's built-in scheduler (`workerCount > 1`, no task system required) with an adaptive worker count of `clamp(bodies / 128, 1, cores)`.
+
+Burst-compiling the write-back job is worth 17–29% of the whole step+sync (same-session A/B, sleep enabled: 4096 bodies 2.73 ms → 1.93 ms). The per-body skip check reads each Transform's position and rotation, and that math is what Burst vectorizes away.
 
 ## Setup
 
